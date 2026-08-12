@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JukeBox — Home Assistant + Music Assistant + SyncLyrics</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --glass: rgba(255,255,255,0.08);
+    --glass-border: rgba(255,255,255,0.15);
+    --glass-hover: rgba(255,255,255,0.14);
+    --glass-strong: rgba(255,255,255,0.18);
+    --accent: #64d8cb;
+    --accent2: #a78bfa;
+    --accent3: #fb923c;
+    --on: #34d399;
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --text-main: rgba(255,255,255,0.95);
+    --text-muted: rgba(255,255,255,0.55);
+    --text-dim: rgba(255,255,255,0.35);
+  }
+
+  body { font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0f1e; color: var(--text-main); min-height: 100vh; padding: 1.5rem; }
+  
+  /* ── Toast ── */
+  #toast { position: fixed; bottom: 5rem; left: 50%; transform: translateX(-50%); background: rgba(20,20,40,0.95); border: 0.5px solid var(--glass-border); border-radius: 12px; padding: 10px 20px; font-size: 0.82rem; color: var(--text-main); backdrop-filter: blur(12px); z-index: 999; opacity: 0; transition: opacity 0.3s; pointer-events: none; white-space: nowrap; }
+  #toast.show { opacity: 1; }
+
+  /* ── Conn badge ── */
+  #conn-badge { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 500; display: none; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: rgba(0,0,0,0.5); border: 0.5px solid rgba(255,255,255,0.15); backdrop-filter: blur(12px); font-size: 0.74rem; color: var(--text-muted); }
+  .cdot { width: 7px; height: 7px; border-radius: 50%; }
+  .cdot.ok { background: var(--on); animation: pulse 2s ease-in-out infinite; }
+  .cdot.err { background: var(--danger); }
+  .cdot.wait { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+
+  /* ── Debug panel ── */
+  #debug-toggle { position: fixed; bottom: 1.5rem; left: 1.5rem; z-index: 999; width: 32px; height: 32px; border-radius: 50%; background: rgba(0,0,0,0.6); border: 0.5px solid rgba(255,255,255,0.2); color: #9ca3af; font-size: 0.9rem; cursor: pointer; }
+  #debug-panel { display: none; position: fixed; bottom: 0; left: 0; right: 0; max-height: 45vh; overflow-y: auto; background: rgba(0,0,0,0.94); border-top: 1px solid rgba(100,216,203,0.3); z-index: 998; font-family: 'Space Mono', monospace; font-size: 0.68rem; padding: 0.5rem; color: #9ca3af; }
+
+  /* ── JukeBox Grid Layout ── */
+  .jb-wrap { display: grid; grid-template-columns: 1fr 1.6fr; gap: 1.25rem; align-items: start; }
+
+  /* Cabinet wrapper */
+  .jb-machine {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 1rem;
+    background: var(--glass); border: 0.5px solid var(--glass-border);
+    border-radius: 28px; backdrop-filter: blur(20px); padding: 1.75rem;
+  }
+
+  .jb-screen-wrap { position: relative; width: 100%; }
+
+  /* Neon tube pillars */
+  .jb-neon-left, .jb-neon-right {
+    position: absolute; top: 0; bottom: 0; width: 10px;
+    border-radius: 999px; pointer-events: none; z-index: 2;
+  }
+  .jb-neon-left  { left: -18px; background: linear-gradient(180deg, #ff2d78 0%, #fff 35%, #ff2d78 55%, #fff 75%, #ff2d78 100%); box-shadow: 0 0 10px 3px rgba(255,45,120,0.8), 0 0 24px 5px rgba(255,45,120,0.35); }
+  .jb-neon-right { right: -18px; background: linear-gradient(180deg, #ff2d78 0%, #fff 35%, #ff2d78 55%, #fff 75%, #ff2d78 100%); box-shadow: 0 0 10px 3px rgba(255,45,120,0.8), 0 0 24px 5px rgba(255,45,120,0.35); }
+  @keyframes neon-flicker { 0%,100%{opacity:1} 93%{opacity:0.6} 94%{opacity:1} 97%{opacity:0.75} 98%{opacity:1} }
+  .jb-neon-left  { animation: neon-flicker 9s ease-in-out infinite; }
+  .jb-neon-right { animation: neon-flicker 9s ease-in-out infinite 3.5s; }
+
+  /* Screen */
+  .jb-screen { width: 100%; background: rgba(0,0,0,0.55); border-radius: 12px 12px 0 0; overflow: hidden; position: relative; border: 1.5px solid rgba(100,216,203,0.2); border-bottom: none; }
+
+  /* Logo bar */
+  .jb-logo-bar {
+    width: 100%; background: linear-gradient(180deg, #111 0%, #1c1c1c 100%);
+    border: 1.5px solid rgba(100,216,203,0.2); border-top: none; border-radius: 0 0 8px 8px;
+    padding: 5px 10px; display: flex; align-items: center; justify-content: center;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 3px 10px rgba(0,0,0,0.4);
+  }
+  .jb-logo-text { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.22em; text-transform: uppercase; color: #ccc; text-shadow: 0 0 8px rgba(200,200,200,0.4); }
+
+  .jb-art-frame { width: 100%; aspect-ratio: 1/1; position: relative; display: flex; align-items: center; justify-content: center; background: #050a14; overflow: hidden; }
+  .jb-art { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity 0.5s; }
+  .jb-art-placeholder { font-size: 5rem; opacity: 0.25; }
+  .jb-vinyl { position: absolute; width: 60%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #2a2a3a, #0a0a14 40%, #1a1a2a 60%, #0a0a14); box-shadow: 0 0 0 2px rgba(255,255,255,0.05); animation: spin-vinyl 4s linear infinite; opacity: 0; transition: opacity 0.5s; }
+  .jb-vinyl.playing { opacity: 0.6; }
+  .jb-vinyl::after { content:''; position:absolute; width:14%; height:14%; border-radius:50%; background:rgba(100,216,203,0.5); top:50%; left:50%; transform:translate(-50%,-50%); box-shadow:0 0 12px var(--accent); }
+  @keyframes spin-vinyl { to { transform: rotate(360deg); } }
+  .jb-eq { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 3px; align-items: flex-end; height: 24px; opacity: 0; transition: opacity 0.4s; }
+  .jb-eq.playing { opacity: 1; }
+  .jb-eq-bar { width: 4px; border-radius: 2px; background: var(--accent); animation: eq-dance 0.8s ease-in-out infinite alternate; transform-origin: bottom; }
+  .jb-eq-bar:nth-child(1){height:60%;animation-delay:0s} .jb-eq-bar:nth-child(2){height:100%;animation-delay:.15s} .jb-eq-bar:nth-child(3){height:70%;animation-delay:.3s} .jb-eq-bar:nth-child(4){height:90%;animation-delay:.1s} .jb-eq-bar:nth-child(5){height:50%;animation-delay:.25s} .jb-eq-bar:nth-child(6){height:80%;animation-delay:.05s} .jb-eq-bar:nth-child(7){height:65%;animation-delay:.2s}
+  @keyframes eq-dance { from { transform: scaleY(0.3); } to { transform: scaleY(1); } }
+  .jb-nowplaying { width: 100%; padding: 0.75rem 1rem 0.5rem; background: rgba(0,0,0,0.4); border-top: 0.5px solid rgba(100,216,203,0.15); }
+  .jb-np-title { font-size: 0.9rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main); }
+  .jb-np-artist { font-size: 0.73rem; color: var(--accent); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb-np-album { font-size: 0.65rem; color: var(--text-dim); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb-controls { display: flex; gap: 0.6rem; align-items: center; justify-content: center; width: 100%; }
+  .jb-btn { border: 0.5px solid var(--glass-border); background: var(--glass); color: var(--text-main); border-radius: 50%; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; transition: background 0.15s; flex-shrink: 0; }
+  .jb-btn:hover { background: var(--glass-hover); }
+  .jb-btn.sm { width: 34px; height: 34px; font-size: 0.8rem; }
+  .jb-btn.lg { width: 46px; height: 46px; font-size: 1.1rem; background: linear-gradient(135deg, rgba(100,216,203,0.25), rgba(167,139,250,0.25)); border-color: var(--accent); }
+  .jb-btn.lg:hover { background: linear-gradient(135deg, rgba(100,216,203,0.4), rgba(167,139,250,0.4)); }
+  .jb-speaker-row { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; width: 100%; }
+  .jb-sp-btn { padding: 5px 12px; border-radius: 999px; font-size: 0.72rem; border: 0.5px solid var(--glass-border); background: var(--glass); color: var(--text-muted); cursor: pointer; font-family: inherit; transition: all 0.2s; }
+  .jb-sp-btn.active { background: rgba(100,216,203,0.2); border-color: var(--accent); color: var(--accent); }
+  .jb-vol-row { width: 100%; display: flex; align-items: center; gap: 8px; }
+  .jb-vol-label { font-size: 0.68rem; color: var(--text-muted); min-width: 28px; text-align: right; }
+  .jb-right { display: flex; flex-direction: column; gap: 1rem; }
+
+  /* ── Lyrics ── */
+  .jb-lyrics-card { background: var(--glass); border: 0.5px solid var(--glass-border); border-radius: 20px; backdrop-filter: blur(20px); padding: 1.25rem 1.5rem; }
+  .jb-lyrics-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; }
+  .jb-lyrics-open { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-size: 0.7rem; border: 0.5px solid var(--glass-border); background: var(--glass); color: var(--text-muted); cursor: pointer; text-decoration: none; font-family: inherit; transition: all 0.15s; }
+  .jb-lyrics-open:hover { background: rgba(100,216,203,0.15); border-color: var(--accent); color: var(--accent); }
+  .jb-lyrics-frame-wrap { position: relative; margin-top: 0.75rem; height: 300px; border-radius: 12px; overflow: hidden; background: rgba(0,0,0,0.4); border: 0.5px solid rgba(100,216,203,0.15); }
+  .jb-lyrics-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: transparent; }
+  .jb-lyrics-ph { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 1rem; pointer-events: none; }
+  .jb-lyrics-ph .ico { font-size: 1.8rem; opacity: 0.35; }
+  .jb-lyrics-ph .msg { font-size: 0.82rem; color: var(--text-muted); }
+  .jb-lyrics-ph .hint { font-size: 0.68rem; color: var(--text-dim); max-width: 240px; line-height: 1.45; }
+
+  /* ── Search & Queue ── */
+  .jb-search-card { background: var(--glass); border: 0.5px solid var(--glass-border); border-radius: 20px; backdrop-filter: blur(20px); padding: 1.25rem 1.5rem; }
+  .jb-search-box { width: 100%; padding: 10px 42px 10px 14px; background: rgba(0,0,0,0.35); border: 0.5px solid rgba(100,216,203,0.3); border-radius: 12px; color: var(--text-main); font-size: 0.9rem; outline: none; font-family: inherit; transition: border-color 0.2s; box-sizing: border-box; }
+  .jb-search-box:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(100,216,203,0.12); }
+  .jb-search-box::placeholder { color: var(--text-dim); }
+  .jb-search-wrap { position: relative; width: 100%; }
+  .jb-mic-btn { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: background 0.15s; }
+  .jb-mic-btn:hover { background: rgba(100,216,203,0.12); }
+  .jb-mic-btn svg { width: 18px; height: 18px; fill: var(--text-dim); transition: fill 0.2s; }
+  .jb-mic-btn.listening svg { fill: #f87171; animation: mic-pulse 1s ease-in-out infinite; }
+  @keyframes mic-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(1.15)} }
+  .jb-results { max-height: 280px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; margin-top: 0.75rem; }
+  .jb-result-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer; border: 0.5px solid transparent; transition: background 0.12s, border-color 0.12s; }
+  .jb-result-item:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); }
+  .jb-result-thumb { width: 42px; height: 42px; border-radius: 8px; object-fit: cover; flex-shrink: 0; background: linear-gradient(135deg, var(--accent2), var(--accent)); display: flex; align-items: center; justify-content: center; font-size: 1rem; }
+  .jb-result-info { flex: 1; min-width: 0; }
+  .jb-result-title { font-size: 0.84rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb-result-sub { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb-result-add { width: 30px; height: 30px; border-radius: 50%; border: 0.5px solid var(--glass-border); background: var(--glass); color: var(--accent); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0; transition: background 0.15s; }
+  .jb-result-add:hover { background: rgba(100,216,203,0.2); }
+  .jb-queue-card { background: var(--glass); border: 0.5px solid var(--glass-border); border-radius: 20px; backdrop-filter: blur(20px); padding: 1.25rem 1.5rem; flex: 1; }
+  .jb-queue-list { max-height: 360px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
+  .jb-queue-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; border: 0.5px solid transparent; transition: background 0.12s; }
+  .jb-queue-item.current { background: rgba(100,216,203,0.08); border-color: rgba(100,216,203,0.2); }
+  .jb-queue-item:hover { background: rgba(255,255,255,0.06); }
+  .jb-queue-num { font-size: 0.68rem; color: var(--text-dim); width: 18px; text-align: center; flex-shrink: 0; }
+  .jb-queue-thumb { width: 38px; height: 38px; border-radius: 7px; object-fit: cover; flex-shrink: 0; background: linear-gradient(135deg, var(--accent2), var(--accent)); display: flex; align-items: center; justify-content: center; font-size: 0.85rem; }
+  .jb-queue-info { flex: 1; min-width: 0; }
+  .jb-queue-title { font-size: 0.82rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb-queue-sub { font-size: 0.68rem; color: var(--text-muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jb-queue-playing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
+
+  /* ── Mobile Tab Navigation Bar ── */
+  .jb-mobile-tabs {
+    display: none; /* Hidden on desktop */
+    gap: 6px;
+    margin-bottom: 0.75rem;
+    background: rgba(0,0,0,0.5);
+    padding: 6px;
+    border-radius: 999px;
+    border: 0.5px solid var(--glass-border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(16px);
+  }
+
+  .jb-tab-btn {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .jb-tab-btn.active {
+    background: rgba(100,216,203,0.2);
+    color: var(--accent);
+    border: 0.5px solid var(--accent);
+  }
+
+  /* ── Mobile & HA App Optimizations (<= 768px) ── */
+  @media(max-width: 768px) {
+    body { padding: 0.75rem; }
+    
+    .jb-wrap { grid-template-columns: 1fr; gap: 0.75rem; }
+    
+    /* Show sticky tabs on mobile */
+    .jb-mobile-tabs { display: flex; }
+
+    /* Hide non-active tabs on mobile */
+    .mobile-tab-content:not(.active-mobile) {
+      display: none !important;
+    }
+
+    /* Container padding and neon fix */
+    .jb-machine, .jb-lyrics-card, .jb-search-card, .jb-queue-card {
+      padding: 1.25rem 1rem;
+      border-radius: 20px;
+    }
+    .jb-neon-left { left: -10px; }
+    .jb-neon-right { right: -10px; }
+
+    /* Larger touch targets */
+    .jb-btn.sm { width: 40px; height: 40px; font-size: 0.95rem; }
+    .jb-btn.lg { width: 52px; height: 52px; font-size: 1.25rem; }
+    .jb-sp-btn { padding: 8px 14px; font-size: 0.78rem; }
+    
+    /* Combined search & queue spacing inside mobile tab */
+    #tab-search-queue {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .jb-lyrics-frame-wrap { height: 240px; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ═══════════════ JUKEBOX VIEW ═══════════════ -->
+  <div class="view" id="view-jukebox">
+
+    <!-- Mobile Navigation Switcher (Active on <= 768px) -->
+    <div class="jb-mobile-tabs">
+      <button class="jb-tab-btn active" onclick="jbSelectTab('player', this)">🎵 Player</button>
+      <button class="jb-tab-btn" onclick="jbSelectTab('lyrics', this)">🎤 Lyrics</button>
+      <button class="jb-tab-btn" onclick="jbSelectTab('search-queue', this)">🔍 Search & Queue</button>
+    </div>
+
+    <div class="jb-wrap">
+
+      <!-- Tab 1 / Left Column: Jukebox Machine -->
+      <div class="jb-machine mobile-tab-content active-mobile" id="tab-player">
+
+        <div class="jb-screen-wrap">
+          <div class="jb-neon-left"></div>
+          <div class="jb-neon-right"></div>
+
+          <div class="jb-screen">
+            <div class="jb-art-frame" id="jb-art-frame">
+              <div class="jb-vinyl" id="jb-vinyl"></div>
+              <img id="jb-art-img" class="jb-art" style="display:none" alt="Album Art">
+              <div class="jb-art-placeholder" id="jb-art-placeholder">🎵</div>
+              <div class="jb-eq" id="jb-eq">
+                <div class="jb-eq-bar"></div><div class="jb-eq-bar"></div><div class="jb-eq-bar"></div>
+                <div class="jb-eq-bar"></div><div class="jb-eq-bar"></div><div class="jb-eq-bar"></div>
+                <div class="jb-eq-bar"></div>
+              </div>
+            </div>
+            <div class="jb-nowplaying">
+              <div class="jb-np-title" id="jb-np-title">Nothing Playing</div>
+              <div class="jb-np-artist" id="jb-np-artist">—</div>
+              <div class="jb-np-album" id="jb-np-album">—</div>
+              <div style="padding:0.4rem 0.5rem 0.2rem">
+                <input id="jb-progress" type="range" min="0" max="100" value="0"
+                  oninput="jbSeekPreview(this.value)" onchange="jbSeek(this.value)"
+                  style="width:100%;accent-color:var(--accent);cursor:pointer;height:3px">
+                <div style="display:flex;justify-content:space-between;margin-top:2px">
+                  <span id="jb-elapsed" style="font-size:0.58rem;color:var(--text-dim);font-family:'Space Mono',monospace">0:00</span>
+                  <span id="jb-duration" style="font-size:0.58rem;color:var(--text-dim);font-family:'Space Mono',monospace">0:00</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="jb-logo-bar">
+            <span class="jb-logo-text">🎵 &nbsp; J U K E B O X &nbsp; 🎵</span>
+          </div>
+        </div>
+
+        <div class="jb-speaker-row" id="jb-speaker-btns"></div>
+
+        <div class="jb-controls">
+          <button class="jb-btn sm" onclick="jbSvc('media_previous_track')" title="Previous">⏮</button>
+          <button class="jb-btn sm" onclick="jbSvc('shuffle_set',{shuffle:true})" title="Shuffle" id="jb-shuffle">🔀</button>
+          <button class="jb-btn lg" id="jb-playpause" onclick="jbTogglePlay()">▶</button>
+          <button class="jb-btn sm" onclick="jbSvc('repeat_set',{repeat:'all'})" title="Repeat" id="jb-repeat">🔁</button>
+          <button class="jb-btn sm" onclick="jbSvc('media_next_track')" title="Next">⏭</button>
+        </div>
+
+        <div class="jb-vol-row">
+          <span style="font-size:1rem">🔉</span>
+          <input id="jb-vol-slider" type="range" min="0" max="100" oninput="jbSetVolume(this.value)"
+            style="flex:1;accent-color:var(--accent);cursor:pointer">
+          <span class="jb-vol-label" id="jb-vol-pct">—</span>
+          <span style="font-size:1rem">🔊</span>
+        </div>
+
+        <div style="width:100%;text-align:center">
+          <div class="ctitle" style="margin-bottom:0.4rem;font-size:0.75rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em">Quick Groups</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center">
+            <button onclick="jbPlayGroup(['media_player.sonos_woonkamer_3','media_player.roam_2'])" class="jb-sp-btn">Beam + Roam</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Column Container -->
+      <div class="jb-right">
+
+        <!-- Tab 2: Lyrics -->
+        <div class="jb-lyrics-card mobile-tab-content" id="tab-lyrics">
+          <div class="jb-lyrics-head">
+            <div class="ctitle" style="margin-bottom:0;font-size:0.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em">Lyrics</div>
+            <a id="jb-lyrics-open" class="jb-lyrics-open" href="#" target="_blank" rel="noopener" title="Open full SyncLyrics view">⛶ Full View</a>
+          </div>
+          <div class="jb-lyrics-frame-wrap">
+            <div class="jb-lyrics-ph" id="jb-lyrics-ph">
+              <div class="ico">🎤</div>
+              <div class="msg">Waiting for SyncLyrics…</div>
+              <div class="hint">Make sure the SyncLyrics server is running and reachable.</div>
+            </div>
+            <iframe id="jb-lyrics-frame" class="jb-lyrics-frame" allowtransparency="true"
+              referrerpolicy="no-referrer" loading="lazy" title="Synced Lyrics"></iframe>
+          </div>
+        </div>
+
+        <!-- Tab 3: Search & Queue Combined -->
+        <div class="jb-right-group mobile-tab-content" id="tab-search-queue">
+          <!-- Search Card -->
+          <div class="jb-search-card">
+            <div class="ctitle" style="margin-bottom:0.5rem;font-size:0.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em">Search Music</div>
+            <div class="jb-search-wrap">
+              <input id="jb-search" class="jb-search-box" type="text" placeholder="Search song, artist, album…"
+                oninput="jbSearch(this.value)" autocomplete="off" spellcheck="false">
+              <button class="jb-mic-btn" id="jb-mic-btn" onclick="jbToggleMic()" title="Voice search">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm-7 8a1 1 0 0 1 1 1 6 6 0 0 0 12 0 1 1 0 0 1 2 0 8 8 0 0 1-7 7.93V22h3a1 1 0 0 1 0 2H8a1 1 0 0 1 0-2h3v-2.07A8 8 0 0 1 4 12a1 1 0 0 1 1-1z"/>
+                </svg>
+              </button>
+            </div>
+            <div id="jb-search-results" class="jb-results">
+              <div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1.5rem 0">Type to search music library</div>
+            </div>
+            <div id="jb-staging-bar" style="display:none;margin-top:0.5rem;padding:0.5rem 0.75rem;background:rgba(52,211,153,0.08);border:0.5px solid rgba(52,211,153,0.25);border-radius:10px;align-items:center;justify-content:space-between;gap:8px">
+              <span id="jb-staging-label" style="font-size:0.75rem;color:#34d399"></span>
+              <div style="display:flex;gap:6px">
+                <button onclick="jbSendStaged()" style="padding:4px 12px;border-radius:999px;font-size:0.72rem;background:rgba(52,211,153,0.2);border:0.5px solid rgba(52,211,153,0.4);color:#34d399;cursor:pointer;font-family:inherit;font-weight:600">▶ Send to Queue</button>
+                <button onclick="jbClearStaged()" style="padding:4px 8px;border-radius:999px;font-size:0.72rem;background:var(--glass);border:0.5px solid var(--glass-border);color:var(--text-muted);cursor:pointer;font-family:inherit">✕</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Queue Card -->
+          <div class="jb-queue-card" style="margin-top: 1rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+              <div class="ctitle" style="margin-bottom:0;font-size:0.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.1em">Up Next · <span id="jb-queue-count" style="color:var(--text-main);text-transform:none;letter-spacing:0;font-size:0.78rem">—</span></div>
+              <button onclick="jbClearQueue()" style="padding:4px 10px;border-radius:999px;font-size:0.7rem;border:0.5px solid var(--glass-border);background:var(--glass);color:var(--text-muted);cursor:pointer;font-family:inherit">Clear</button>
+            </div>
+            <div id="jb-queue-list" class="jb-queue-list">
+              <div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1.5rem 0">Queue is empty</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+<div id="toast"></div>
+<div id="conn-badge" style="display:flex"><div class="cdot wait" id="cdot"></div><span id="clbl">Connecting…</span></div>
+
+<button id="debug-toggle" onclick="jbToggleDebug()" title="Debug log">🐞</button>
+<div id="debug-panel"></div>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────
+var haToken = 'YOUR_HA_LONG_LIVED_ACCESS_TOKEN_HERE';
+var SYNCLYRICS_URL = 'http://synclyrics.local:9012';
+
+var haUrl = '', ws, msgId = 1, cbs = {}, states = {};
+
+// ── Debug logging ──────────────────────────────────────────────────
+var jbDebugLog = [];
+var jbDebugVisible = false;
+var JB_DEBUG_MAX = 300;
+
+function jbLog(level, msg, data) {
+  var entry = { t: new Date().toLocaleTimeString(), level: level, msg: msg, data: data };
+  jbDebugLog.push(entry);
+  if (jbDebugLog.length > JB_DEBUG_MAX) jbDebugLog.shift();
+  var fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  fn('[JB]', msg, data !== undefined ? data : '');
+  if (level === 'error' || level === 'warn') toast((level === 'error' ? '⚠ ' : '⚠️ ') + msg);
+  if (jbDebugVisible) jbRenderDebug();
+}
+
+function jbToggleDebug() {
+  jbDebugVisible = !jbDebugVisible;
+  var panel = document.getElementById('debug-panel');
+  if (panel) panel.style.display = jbDebugVisible ? 'block' : 'none';
+  if (jbDebugVisible) jbRenderDebug();
+}
+
+function jbRenderDebug() {
+  var panel = document.getElementById('debug-panel');
+  if (!panel) return;
+  var colors = { error: '#f87171', warn: '#fbbf24', info: '#64d8cb', log: '#9ca3af' };
+  panel.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;position:sticky;top:0;background:rgba(0,0,0,0.94);padding-bottom:4px">'
+    + '<strong style="color:#fff">Debug Log (' + jbDebugLog.length + ')</strong>'
+    + '<span><button onclick="jbDebugLog=[];jbRenderDebug()" style="background:none;border:0.5px solid rgba(255,255,255,0.2);color:#9ca3af;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:0.65rem;margin-right:6px">Clear</button>'
+    + '<button onclick="jbToggleDebug()" style="background:none;border:0.5px solid rgba(255,255,255,0.2);color:#9ca3af;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:0.65rem">Close</button></span>'
+    + '</div>'
+    + jbDebugLog.slice().reverse().map(function(e) {
+        var dataStr = '';
+        if (e.data !== undefined) {
+          try { dataStr = typeof e.data === 'string' ? e.data : JSON.stringify(e.data); } catch(err) { dataStr = String(e.data); }
+        }
+        return '<div style="padding:3px 0;border-bottom:0.5px solid rgba(255,255,255,0.06)">'
+          + '<span style="color:#555">' + e.t + '</span> '
+          + '<span style="color:' + (colors[e.level]||'#9ca3af') + ';font-weight:600">[' + e.level.toUpperCase() + ']</span> '
+          + '<span style="color:#e5e5e5">' + e.msg + '</span>'
+          + (dataStr ? '<div style="color:#777;margin-left:14px;word-break:break-all">' + dataStr + '</div>' : '')
+          + '</div>';
+      }).join('');
+}
+
+// Catch anything that would otherwise fail totally silently
+window.onerror = function(msg, src, line, col) {
+  jbLog('error', 'JS error: ' + msg + ' (' + (src||'').split('/').pop() + ':' + line + ')');
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+  jbLog('error', 'Unhandled rejection: ' + (e.reason && e.reason.message || e.reason));
+});
+
+// ── Mobile Tab Navigation Logic ──
+function jbSelectTab(tabId, btnElement) {
+  var buttons = document.querySelectorAll('.jb-tab-btn');
+  buttons.forEach(function(btn) { btn.classList.remove('active'); });
+  if (btnElement) btnElement.classList.add('active');
+
+  var contents = document.querySelectorAll('.mobile-tab-content');
+  contents.forEach(function(content) {
+    if (content.id === 'tab-' + tabId) {
+      content.classList.add('active-mobile');
+    } else {
+      content.classList.remove('active-mobile');
+    }
+  });
+}
+
+// ── HA WebSocket ──
+function openWS() {
+  var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var wsUrl = wsProto + '//' + window.location.host + '/api/websocket';
+  haUrl = window.location.protocol + '//' + window.location.host;
+  try { ws = new WebSocket(wsUrl); } catch(e) { jbLog('error', 'HA WebSocket failed: ' + e.message); return; }
+  ws.onopen = function() { connStatus('wait','Authenticating…'); jbLog('log','HA WebSocket opened'); };
+  ws.onmessage = function(e) { onMsg(JSON.parse(e.data)); };
+  ws.onerror = function() { connStatus('err','Connection failed'); jbLog('error','HA WebSocket error'); };
+  ws.onclose = function() { connStatus('err','Disconnected'); jbLog('warn','HA WebSocket closed — reconnecting in 5s'); setTimeout(openWS, 5000); };
+}
+
+function onMsg(m) {
+  if (m.type === 'auth_required') send({type:'auth',access_token:haToken});
+  else if (m.type === 'auth_ok') onAuth();
+  else if (m.type === 'auth_invalid') {
+    connStatus('err','Invalid token');
+    jbLog('error', 'Invalid HA token');
+    ws.close();
+  }
+  else if (m.type === 'result' && cbs[m.id]) { cbs[m.id](m); delete cbs[m.id]; }
+  else if (m.type === 'event' && m.event && m.event.event_type === 'state_changed') {
+    var d = m.event.data;
+    if (d.new_state) { states[d.entity_id] = d.new_state; onStateChange(d.entity_id); }
+  }
+}
+
+function onAuth() {
+  connStatus('ok','Connected');
+  jbLog('log', 'HA WebSocket authenticated');
+  sendCb({type:'get_states'}, function(m) {
+    if (!m.success) return;
+    m.result.forEach(function(s) { states[s.entity_id] = s; });
+    jbRender();
+  });
+  sendCb({type:'subscribe_events',event_type:'state_changed'}, function(){});
+}
+
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function sendCb(o, cb) { o.id = msgId++; cbs[o.id] = cb; send(o); }
+
+function connStatus(type, msg) {
+  var dot = document.getElementById('cdot');
+  var lbl = document.getElementById('clbl');
+  if (dot) dot.className = 'cdot ' + type;
+  if (lbl) lbl.textContent = msg;
+}
+
+function toast(msg) {
+  var t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(function() { t.classList.remove('show'); }, 3000);
+}
+
+function onStateChange(eid) { jbOnPlayerStateChange(eid); }
+
+function svc(domain, service, entityId, extra) {
+  extra = extra || {};
+  sendCb({type:'call_service',domain:domain,service:service,service_data:Object.assign({entity_id:entityId},extra)}, function(m) {
+    if (m.success) { toast('✓ ' + service.replace(/_/g,' ')); }
+    else { jbLog('error', service + ' failed: ' + (m.error && m.error.message || 'unknown'), m.error); }
+  });
+}
+
+function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
+function cap(s){return s?s.charAt(0).toUpperCase()+s.slice(1):'—';}
+
+var SONOS = [
+  ['media_player.sonos_woonkamer_3','Beam'],
+  ['media_player.roam_2','Roam 2'],
+];
+
+// NOTE: these are just seed values (originally Sonos RINCON ids, not real MA queue ids).
+// jbLoadQueue() self-heals this map at runtime once it finds the real MA queue_id by name match,
+// so these don't need to be accurate — they're only used until the first successful lookup.
+var JB_QUEUE_IDS = {
+  'media_player.sonos_woonkamer_3':     'RINCON_XXXXXXXXXXXX01400',
+  'media_player.roam_2':  'RINCON_XXXXXXXXXXXX01400',
+};
+
+var jbActive = null;
+var jbMaEntities = [];
+var jbMaConfigEntryId = null;
+var jbSearchTimer = null;
+var jbSearchSeq = 0;
+var jbQueue = [];
+var jbQueueTimer = null;
+var jbLastTrackTitle = null;
+var jbStaged = [];
+var jbThumbCache = {};
+
+var jbMaToken = 'YOUR_MA_TOKEN_HERE';
+var jbMaWs = null;
+var jbMaWsAuthed = false;
+var jbMaWsPing = null;
+var jbMaWsPending = {};
+
+var jbProgressInterval = null;
+var jbElapsed = 0;
+var jbDuration = 0;
+var jbSeeking = false;
+
+function jbMaWsOpen(onReady) {
+  if (jbMaWs && jbMaWs.readyState === WebSocket.OPEN && jbMaWsAuthed) { onReady(); return; }
+  var url = haUrl.replace(/^http/, 'ws').replace(/:\d+$/, '') + ':8095/ws';
+  jbLog('log', 'Opening MA WebSocket', url);
+  try {
+    var wsMa = new WebSocket(url);
+    var settled = false;
+    var to = setTimeout(function() {
+      if (!jbMaWsAuthed) {
+        settled = true;
+        jbLog('error', 'MA WebSocket auth timeout after 8s — url: ' + url);
+        if (wsMa.readyState !== WebSocket.CLOSED) wsMa.close();
+      }
+    }, 8000);
+    wsMa.onopen = function() {
+      jbLog('log', 'MA WebSocket opened, authenticating…');
+      wsMa.send(JSON.stringify({ message_id: 'auth', command: 'auth', args: { token: jbMaToken } }));
+    };
+    wsMa.onmessage = function(e) {
+      try {
+        var msg = JSON.parse(e.data);
+        if (msg.event) return;
+        if (!jbMaWsAuthed) {
+          if (msg.message_id === 'auth') {
+            if (msg.result && msg.result.authenticated) {
+              settled = true; clearTimeout(to);
+              jbMaWs = wsMa; jbMaWsAuthed = true;
+              jbLog('log', 'MA WebSocket authenticated');
+              clearInterval(jbMaWsPing);
+              jbMaWsPing = setInterval(function() {
+                if (jbMaWs && jbMaWs.readyState === WebSocket.OPEN)
+                  jbMaWs.send(JSON.stringify({ message_id: 'ping_' + Date.now(), command: 'info', args: {} }));
+                else clearInterval(jbMaWsPing);
+              }, 30000);
+              onReady();
+            } else {
+              settled = true; clearTimeout(to);
+              jbLog('error', 'MA WebSocket auth rejected', msg);
+            }
+          }
+          return;
+        }
+        if (msg.error) jbLog('warn', 'MA command error', msg);
+        if (msg.message_id && jbMaWsPending[msg.message_id]) {
+          var cb = jbMaWsPending[msg.message_id];
+          delete jbMaWsPending[msg.message_id];
+          cb(msg);
+        }
+      } catch(err) { jbLog('error', 'MA WebSocket message parse failed: ' + err.message); }
+    };
+    wsMa.onerror = function() { if (!settled) jbLog('error', 'MA WebSocket error — check url/port 8095: ' + url); };
+    wsMa.onclose = function(e) {
+      if (!settled) jbLog('warn', 'MA WebSocket closed unexpectedly (code ' + (e && e.code) + ')');
+      jbMaWs = null; jbMaWsAuthed = false; jbMaWsPending = {};
+      clearInterval(jbMaWsPing); clearTimeout(to);
+    };
+  } catch(e) { jbLog('error', 'MA WebSocket exception: ' + e.message); }
+}
+
+function jbMaWsSend(cmd, args, cb) {
+  if (!jbMaWs || jbMaWs.readyState !== WebSocket.OPEN || !jbMaWsAuthed) return false;
+  var id = 'jb_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+  if (cb) jbMaWsPending[id] = cb;
+  jbMaWs.send(JSON.stringify({ message_id: id, command: cmd, args: args || {} }));
+  return true;
+}
+
+function jbDiscover(callback) {
+  jbMaEntities = SONOS.map(function(p){ return {id:p[0], name:p[1]}; });
+  if (!jbActive || !jbMaEntities.find(function(e){ return e.id === jbActive; })) {
+    var preferred = jbMaEntities.find(function(e){
+      return e.id.indexOf('living_room') !== -1 || e.name.toLowerCase().indexOf('living') !== -1;
+    }) || jbMaEntities[0];
+    jbActive = preferred ? preferred.id : null;
+  }
+  if (jbMaConfigEntryId) { if (callback) callback(); return; }
+  sendCb({type: 'config_entries/get'}, function(m) {
+    if (m.success && Array.isArray(m.result)) {
+      var entry = m.result.find(function(e){ return e.domain === 'music_assistant'; });
+      if (entry) jbMaConfigEntryId = entry.entry_id;
+      else jbLog('warn', 'No music_assistant config entry found in HA');
+    }
+    if (callback) callback();
+  });
+}
+
+function jbRender() {
+  jbDiscover(function() {
+    jbRenderSpeakerBtns();
+    jbUpdateNowPlaying();
+    jbLoadQueue();
+  });
+  jbInitLyrics();
+}
+
+var jbLyricsLoaded = false;
+
+function jbLyricsBaseUrl() {
+  if (SYNCLYRICS_URL) return SYNCLYRICS_URL.replace(/\/+$/, '');
+  var loc = window.location;
+  var port = loc.protocol === 'https:' ? '9013' : '9012';
+  return loc.protocol + '//' + loc.hostname + ':' + port;
+}
+
+function jbInitLyrics() {
+  if (jbLyricsLoaded) return;
+  var frame = document.getElementById('jb-lyrics-frame');
+  if (!frame) return;
+  var base = jbLyricsBaseUrl();
+  frame.src = base + '/?minimal=true';
+  var open = document.getElementById('jb-lyrics-open');
+  if (open) open.href = base + '/';
+  jbLyricsLoaded = true;
+}
+
+function jbRenderSpeakerBtns() {
+  var el = document.getElementById('jb-speaker-btns'); if (!el) return;
+  el.innerHTML = jbMaEntities.map(function(e) {
+    var active = e.id === jbActive;
+    return '<button onclick="jbSetSpeaker(\'' + e.id + '\')" class="jb-sp-btn' + (active ? ' active' : '') + '">' + e.name + '</button>';
+  }).join('');
+}
+
+function jbSetSpeaker(eid) {
+  if (eid === jbActive) return;
+  jbActive = eid;
+  jbQueue = [];
+  jbLastTrackTitle = null;
+  clearTimeout(jbQueueTimer);
+  jbRenderSpeakerBtns();
+  jbUpdateNowPlaying();
+  jbLoadQueue();
+}
+
+function jbSpeakerName() {
+  var e = jbMaEntities && jbMaEntities.find(function(x){ return x.id === jbActive; });
+  return e ? e.name : (jbActive || 'Unknown');
+}
+
+function jbOnPlayerStateChange(eid) {
+  if (eid !== jbActive) return;
+  var s = states[eid];
+  var newTitle = s && s.attributes && s.attributes.media_title;
+  jbUpdateNowPlaying();
+  if (newTitle !== jbLastTrackTitle) {
+    jbLastTrackTitle = newTitle;
+    clearTimeout(jbQueueTimer);
+    jbQueueTimer = setTimeout(jbLoadQueue, 1500);
+  }
+}
+
+setInterval(function() {
+  if (!jbActive) return;
+  sendCb({type:'call_service', domain:'homeassistant', service:'update_entity', service_data:{entity_id: jbActive}}, function(){});
+}, 5000);
+
+function jbUpdateNowPlaying() {
+  if (!jbActive) return;
+  var s = states[jbActive];
+  var playing = s && s.state === 'playing';
+  var title  = (s && s.attributes && s.attributes.media_title)  || (s ? cap(s.state) : 'Nothing Playing');
+  var artist = (s && s.attributes && s.attributes.media_artist) || '—';
+  var album  = (s && s.attributes && s.attributes.media_album_name) || '—';
+  var thumb = (s && s.attributes && s.attributes.entity_picture) || (jbQueue && jbQueue[0] && jbQueue[0].current && jbQueue[0].thumb) || '';
+  var vol    = (s && s.attributes && s.attributes.volume_level != null) ? Math.round(s.attributes.volume_level * 100) : null;
+
+  set('jb-np-title', title);
+  set('jb-np-artist', artist);
+  set('jb-np-album', album);
+
+  var artImg = document.getElementById('jb-art-img');
+  var artPh  = document.getElementById('jb-art-placeholder');
+  var vinyl  = document.getElementById('jb-vinyl');
+  var eq     = document.getElementById('jb-eq');
+  var pp     = document.getElementById('jb-playpause');
+
+  if (thumb && typeof thumb === 'string' && artImg) {
+    var src = thumb.startsWith('http') ? thumb : haUrl + thumb;
+    if (artImg.getAttribute('src') !== src) artImg.src = src;
+    artImg.style.display = 'block';
+    if (artPh) artPh.style.display = 'none';
+  } else {
+    if (artImg) artImg.style.display = 'none';
+    if (artPh) artPh.style.display = 'flex';
+  }
+
+  if (vinyl) vinyl.classList.toggle('playing', playing);
+  if (eq)    eq.classList.toggle('playing', playing);
+  if (pp)    pp.textContent = playing ? '⏸' : '▶';
+
+  var volSlider = document.getElementById('jb-vol-slider');
+  if (volSlider && vol !== null) volSlider.value = vol;
+  set('jb-vol-pct', vol !== null ? vol + '%' : '—');
+
+  var rawDuration = s && s.attributes && s.attributes.media_duration;
+  var rawPosition = s && s.attributes && s.attributes.media_position;
+  var posUpdated  = s && s.attributes && s.attributes.media_position_updated_at;
+  if (rawDuration != null) {
+    jbDuration = parseFloat(rawDuration) || 0;
+    if (rawPosition != null && !jbSeeking) {
+      var posAge = posUpdated ? (Date.now() - new Date(posUpdated).getTime()) / 1000 : 0;
+      jbElapsed = Math.min(parseFloat(rawPosition) + (playing ? posAge : 0), jbDuration);
+    }
+    jbUpdateProgressUI();
+  }
+  if (playing) { jbStartProgressTick(); } else { clearInterval(jbProgressInterval); }
+}
+
+function jbLoadQueue() {
+  if (!jbActive) { jbRenderQueue(); return; }
+  jbMaWsOpen(function() {
+    jbMaWsSend('player_queues/all', {}, function(msg) {
+      var queues = Array.isArray(msg.result) ? msg.result : [];
+      var queueId = JB_QUEUE_IDS[jbActive];
+      var haState = states[jbActive];
+      var currentTitle = haState && haState.attributes && haState.attributes.media_title;
+      var spName = jbSpeakerName();
+
+      jbLog('log', 'jbLoadQueue: active=' + jbActive + ' expectedQueueId=' + queueId + ' spName=' + spName,
+        queues.map(function(q){ return {id:q.queue_id, name:q.display_name, current:q.current_item&&q.current_item.name}; }));
+
+      var chosen = queueId && queues.find(function(q){ return q.queue_id === queueId; });
+      if (!chosen && currentTitle) {
+        chosen = queues.find(function(q){
+          return q.current_item && (q.current_item.name||'').toLowerCase() === currentTitle.toLowerCase();
+        });
+      }
+      if (!chosen) {
+        chosen = queues.find(function(q){
+          var qn = (q.display_name||'').toLowerCase().trim();
+          var sn = spName.toLowerCase().trim();
+          return qn === sn || qn.indexOf(sn) !== -1 || sn.indexOf(qn) !== -1;
+        });
+        if (chosen) { JB_QUEUE_IDS[jbActive] = chosen.queue_id; jbLog('log', 'Self-healed queue_id for ' + jbActive + ' -> ' + chosen.queue_id); }
+      }
+
+      if (!chosen || !chosen.items) {
+        jbLog('warn', 'No MA queue matched for "' + spName + '" — showing single now-playing fallback');
+        jbShowNowPlayingFromHA();
+        return;
+      }
+
+      var useIndex = chosen.current_index || 0;
+      jbMaWsSend('player_queues/items', { queue_id: chosen.queue_id, limit: 500, offset: 0 }, function(msg2) {
+        var items = Array.isArray(msg2.result) ? msg2.result : [];
+        jbLog('log', 'player_queues/items returned ' + items.length + ' items for queue ' + chosen.queue_id,
+          items.slice(0, 5).map(function(qi){ var mi = qi.media_item || qi; return mi.name || qi.name; }));
+        if (!items.length) { jbLog('warn', 'Matched queue has zero items'); jbShowNowPlayingFromHA(); return; }
+
+        var sliced = items.slice(useIndex, useIndex + 9);
+        jbQueue = sliced.map(function(qi, i) {
+          var mi = qi.media_item || qi;
+          var uri = mi.uri || '';
+          var thumbVal = jbThumbCache[uri] || mi.image || (mi.album && mi.album.image) || '';
+          return {
+            title: mi.name || qi.name || 'Unknown',
+            sub:   (mi.artists && mi.artists[0] && mi.artists[0].name) || '',
+            thumb: thumbVal,
+            cid:   uri,
+            current: i === 0
+          };
+        });
+
+        jbLog('log', 'jbQueue populated with ' + jbQueue.length + ' entries, useIndex=' + useIndex);
+
+        var upNext = jbQueue.filter(function(t){ return !t.current; }).length;
+        var countEl = document.getElementById('jb-queue-count');
+        if (countEl) countEl.textContent = upNext > 0 ? upNext + ' up next' : 'Now Playing · last track';
+        jbRenderQueue();
+        jbUpdateNowPlaying();
+      });
+    });
+  });
+}
+
+function jbShowNowPlayingFromHA() {
+  if (jbQueue && jbQueue.length > 0) return;
+  var s = jbActive && states[jbActive];
+  if (!s || !s.attributes) { jbQueue = []; jbRenderQueue(); return; }
+  var attr = s.attributes;
+  var title = attr.media_title || '';
+  if (!title) {
+    var qEl = document.getElementById('jb-queue-list');
+    if (qEl) qEl.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1.5rem 0">Queue empty — add songs to start</div>';
+    var cEl = document.getElementById('jb-queue-count');
+    if (cEl) cEl.textContent = '0 tracks';
+    return;
+  }
+  jbQueue = [{
+    title: title,
+    sub:   (attr.media_artist||'') + (attr.media_album_name ? ' · ' + attr.media_album_name : ''),
+    thumb: attr.entity_picture || (jbQueue && jbQueue[0] && jbQueue[0].thumb) || '',
+    cid:   '',
+    current: true
+  }];
+  var countEl = document.getElementById('jb-queue-count');
+  if (countEl) countEl.textContent = 'Now Playing';
+  jbRenderQueue();
+}
+
+function jbRenderQueue() {
+  var el = document.getElementById('jb-queue-list'); if (!el) return;
+  var countEl = document.getElementById('jb-queue-count');
+  if (!jbQueue || !jbQueue.length) {
+    el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1.5rem 0">Queue is empty — search and add songs above</div>';
+    if (countEl) countEl.textContent = '0 tracks';
+    return;
+  }
+  var upNextNum = 0;
+  el.innerHTML = jbQueue.map(function(item) {
+    var thumbSrc = typeof item.thumb === 'string' ? item.thumb : '';
+    if (thumbSrc && !thumbSrc.startsWith('http') && !thumbSrc.startsWith('data:')) thumbSrc = haUrl + thumbSrc;
+    var artHtml = thumbSrc
+      ? '<img src="'+thumbSrc+'" class="jb-queue-thumb" style="object-fit:cover" onerror="this.style.display=\'none\'">'
+      : '<div class="jb-queue-thumb">🎵</div>';
+    var indicator;
+    if (item.current) {
+      indicator = '<div class="jb-queue-playing-dot"></div>';
+    } else {
+      upNextNum++;
+      indicator = '<div class="jb-queue-num">'+upNextNum+'</div>';
+    }
+    var divider = (!item.current && upNextNum === 1)
+      ? '<div style="font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);padding:8px 10px 4px;font-weight:500">Up Next</div>'
+      : '';
+    return divider + '<div class="jb-queue-item'+(item.current?' current':'')+'">'
+      + indicator + artHtml
+      + '<div class="jb-queue-info">'
+      + (item.current ? '<div style="font-size:0.62rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:2px">Now Playing</div>' : '')
+      + '<div class="jb-queue-title">'+(item.title||'Unknown')+'</div>'
+      + '<div class="jb-queue-sub">'+(item.sub||'')+'</div>'
+      + '</div></div>';
+  }).join('');
+}
+
+function jbUpdateStagingBar() {
+  var bar = document.getElementById('jb-staging-bar');
+  var label = document.getElementById('jb-staging-label');
+  if (!bar || !label) return;
+  if (!jbStaged.length) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'flex';
+    label.textContent = jbStaged.length + ' song' + (jbStaged.length > 1 ? 's' : '') + ' staged';
+  }
+}
+
+function jbClearStaged() { jbStaged = []; jbUpdateStagingBar(); }
+
+function jbSendStaged() {
+  if (!jbStaged.length) return;
+  var uris   = jbStaged.map(function(s){ return s.cid; });
+  var titles = jbStaged.map(function(s){ return s.title; });
+  var isEmpty = !jbQueue || !jbQueue.length;
+  var option  = isEmpty ? 'play' : 'add';
+  var queueId = JB_QUEUE_IDS[jbActive];
+
+  jbLog('log', 'jbSendStaged: queueId=' + queueId + ' option=' + option, uris);
+
+  function afterSend(err) {
+    if (err) { jbLog('error', 'Send to queue failed: ' + err); return; }
+    toast((isEmpty ? '▶ Playing: ' : '➕ Queued: ') + titles.join(', '));
+    jbStaged = [];
+    jbUpdateStagingBar();
+    clearTimeout(jbQueueTimer);
+    jbQueueTimer = setTimeout(function(){ jbLoadQueue(); }, 2000);
+  }
+
+  if (queueId && jbMaWs && jbMaWs.readyState === WebSocket.OPEN && jbMaWsAuthed) {
+    jbMaWsSend('player_queues/play_media', { queue_id: queueId, media: uris, option: option }, function(msg){
+      afterSend(msg.error ? (msg.error.details || msg.error.error_code) : null);
+    });
+  } else {
+    if (!queueId) jbLog('warn', 'No queueId known for ' + jbActive + ' — falling back to HA service call');
+    sendCb({type:'call_service', domain:'music_assistant', service:'play_media',
+      service_data:{entity_id:jbActive, media_id:uris, enqueue: isEmpty ? 'play' : 'add'}}, function(m){
+      afterSend(m.success ? null : (m.error && m.error.message));
+    });
+  }
+}
+
+function jbAddToQueue(idx) {
+  var item = window._jbResults && window._jbResults[idx];
+  if (!item || !item.cid) { jbLog('warn', 'No URI for this item'); return; }
+  var isEmpty = !jbQueue || !jbQueue.length;
+
+  if (!item.isLocal && !isEmpty) {
+    jbLog('warn', 'Streaming tracks can only be added to an empty queue.');
+    return;
+  }
+
+  if (isEmpty && !jbStaged.length) {
+    var queueId = JB_QUEUE_IDS[jbActive];
+    if (queueId && jbMaWs && jbMaWs.readyState === WebSocket.OPEN && jbMaWsAuthed) {
+      jbMaWsSend('player_queues/play_media', { queue_id: queueId, media: [item.cid], option: 'play' }, function(msg) {
+        if (msg.error) { jbLog('error', 'play_media failed: ' + (msg.error.details || msg.error.error_code || 'unknown'), msg); return; }
+        toast('▶ Playing: ' + item.title);
+        jbLog('log', 'Playing ' + item.title, { uri: item.cid, queueId: queueId });
+        clearTimeout(jbQueueTimer);
+        jbQueueTimer = setTimeout(function() { jbLoadQueue(); }, 2000);
+      });
+    } else {
+      if (!queueId) jbLog('warn', 'No queueId known for ' + jbActive + ' — falling back to HA service call');
+      sendCb({type:'call_service', domain:'music_assistant', service:'play_media',
+        service_data:{entity_id:jbActive, media_id:item.cid, enqueue:'play'}}, function(m){
+        if (!m.success) { jbLog('error', 'play_media (HA fallback) failed: ' + (m.error && m.error.message || 'unknown'), m.error); return; }
+        toast('▶ Playing: '+item.title); clearTimeout(jbQueueTimer); jbQueueTimer=setTimeout(jbLoadQueue,3000);
+      });
+    }
+    return;
+  }
+
+  jbStaged.push({ title: item.title, cid: item.cid, isLocal: item.isLocal, thumb: item.thumb || '' });
+  jbUpdateStagingBar();
+  toast('📋 Staged: ' + item.title);
+}
+
+function jbSearch(val) {
+  clearTimeout(jbSearchTimer);
+  val = val.trim();
+  var el = document.getElementById('jb-search-results'); if (!el) return;
+  if (val.length < 2) {
+    jbSearchSeq++;
+    el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1.5rem 0">Type at least 2 characters</div>';
+    return;
+  }
+  el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);text-align:center;padding:1rem 0">🔍 Searching…</div>';
+  jbSearchTimer = setTimeout(function() { jbDoSearch(val); }, 600);
+}
+
+function jbDoSearch(query) {
+  if (!jbMaConfigEntryId) {
+    jbDiscover(function() { if (jbMaConfigEntryId) jbDoSearch(query); });
+    return;
+  }
+  jbSearchSeq++;
+  var mySeq = jbSearchSeq;
+
+  sendCb({
+    type: 'call_service', domain: 'music_assistant', service: 'search',
+    return_response: true,
+    service_data: { config_entry_id: jbMaConfigEntryId, name: query, media_type: ['track','album','artist'], limit: 25 }
+  }, function(m) {
+    if (mySeq !== jbSearchSeq) return;
+
+    if (!m.success) {
+      jbLog('warn', 'music_assistant.search service failed, falling back to browse_media: ' + (m.error && m.error.message));
+      jbBrowseSearch(query);
+      return;
+    }
+
+    var resp = m.result && m.result.response;
+    if (!resp) { jbLog('warn', 'search returned no response payload, falling back to browse_media'); jbBrowseSearch(query); return; }
+
+    function grabList(b) {
+      if (!b) return [];
+      if (Array.isArray(b)) return b;
+      if (b.items && Array.isArray(b.items)) return b.items;
+      return [];
+    }
+
+    var allTracks     = grabList(resp.tracks);
+    var albumResults  = grabList(resp.albums);
+    var artistResults = grabList(resp.artists);
+    var libraryTracks   = allTracks.filter(function(t){ return (t.uri||'').indexOf('library://') === 0; });
+    var streamingTracks = allTracks.filter(function(t){ return (t.uri||'').indexOf('library://') !== 0; });
+
+    allTracks.forEach(function(t) {
+      if (t.uri && (t.image_url || t.thumbnail)) jbThumbCache[t.uri] = t.image_url || t.thumbnail;
+    });
+
+    function jbRenderFromParts(libTracks, strTracks) {
+      var maxStreaming = libTracks.length > 0 ? 5 : 8;
+      var items = [];
+      libTracks.slice(0,12).forEach(function(t){ items.push(jbTrackToItem(t, true)); });
+      strTracks.slice(0,maxStreaming).forEach(function(t){ items.push(jbTrackToItem(t, false)); });
+      albumResults.slice(0,5).forEach(function(a) {
+        items.push({
+          title: a.name||'Unknown Album', sub: ((a.artists&&a.artists[0]&&a.artists[0].name)||'') + ' · Album',
+          thumb: a.image_url||a.thumbnail||'', ctype: 'album', cid: a.uri||a.item_id||'', isLocal: (a.uri||'').indexOf('library://') === 0
+        });
+      });
+      artistResults.slice(0,3).forEach(function(a) {
+        items.push({
+          title: a.name||'Unknown Artist', sub: 'Artist', thumb: a.image_url||a.thumbnail||'',
+          ctype: 'artist', cid: a.uri||a.item_id||'', isLocal: (a.uri||'').indexOf('library://') === 0
+        });
+      });
+      if (!items.length) { jbBrowseSearch(query); return; }
+      jbRenderSearchResults(items, query);
+    }
+
+    jbRenderFromParts(libraryTracks, streamingTracks);
+  });
+}
+
+function jbTrackToItem(t, isLocal) {
+  return {
+    title: t.name || 'Unknown',
+    sub:   ((t.artists && t.artists[0] && t.artists[0].name) || '') + (t.album && t.album.name ? ' · ' + t.album.name : ''),
+    thumb: t.image_url || t.thumbnail || '',
+    ctype: 'track', cid: t.uri || t.item_id || '', isLocal: !!isLocal
+  };
+}
+
+function jbBrowseSearch(query) {
+  var el = document.getElementById('jb-search-results'); if (!el) return;
+  el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1rem 0">🔍 Searching…</div>';
+  sendCb({
+    type:'call_service', domain:'media_player', service:'browse_media',
+    return_response: true,
+    service_data:{entity_id:jbActive, media_content_type:'search', media_content_id:query}
+  }, function(m) {
+    var res = m.result && m.result.response && m.result.response[jbActive];
+    if (!res || !res.children || !res.children.length) {
+      jbSearchError('No results for "'+query+'"'); return;
+    }
+    var items = res.children.map(function(c) {
+      return {
+        title: c.title||'Unknown', sub: c.media_class||'', thumb: c.thumbnail||'',
+        ctype: c.media_content_type||'track', cid: c.media_content_id||'', isLocal: true
+      };
+    });
+    jbRenderSearchResults(items, query);
+  });
+}
+
+function jbSearchError(html) {
+  var el = document.getElementById('jb-search-results'); if (!el) return;
+  el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);text-align:center;padding:1.5rem 0.5rem">⚠ '+html+'</div>';
+}
+
+function jbRenderSearchResults(items, query) {
+  var el = document.getElementById('jb-search-results'); if (!el) return;
+  if (!items.length) { jbSearchError('No results for "'+query+'"'); return; }
+  window._jbResults = items;
+  var typeIcon = { track:'🎵', album:'💿', artist:'🎤' };
+  el.innerHTML = items.slice(0,30).map(function(item, i) {
+    var icon = typeIcon[item.ctype] || '🎵';
+    var thumbSrc = item.thumb || '';
+    var artHtml = thumbSrc
+      ? '<img src="'+thumbSrc+'" class="jb-result-thumb" style="object-fit:cover" onerror="this.style.background=\'linear-gradient(135deg,var(--accent2),var(--accent))\';this.removeAttribute(\'src\')">'
+      : '<div class="jb-result-thumb" style="display:flex;align-items:center;justify-content:center">'+icon+'</div>';
+    var badge = item.isLocal
+      ? '<span style="font-size:0.58rem;background:rgba(52,211,153,0.15);color:#34d399;border:0.5px solid rgba(52,211,153,0.3);border-radius:4px;padding:1px 5px;margin-left:4px">library</span>'
+      : '<span style="font-size:0.58rem;background:rgba(100,216,203,0.1);color:var(--text-dim);border:0.5px solid var(--glass-border);border-radius:4px;padding:1px 5px;margin-left:4px">streaming</span>';
+    return '<div class="jb-result-item">'
+      + artHtml
+      + '<div class="jb-result-info">'
+      + '<div class="jb-result-title">'+icon+' '+(item.title||'Unknown')+'</div>'
+      + '<div class="jb-result-sub">'+(item.sub||item.ctype||'')+badge+'</div>'
+      + '</div>'
+      + '<button class="jb-result-add" onclick="event.stopPropagation();jbAddToQueue('+i+')" title="Add to queue">+</button>'
+      + '</div>';
+  }).join('');
+}
+
+var jbRecognition = null;
+var jbMicActive = false;
+
+function jbToggleMic() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    jbLog('warn', 'Speech recognition not supported in this browser');
+    return;
+  }
+  if (jbMicActive && jbRecognition) { jbRecognition.stop(); return; }
+  jbStartRecognition();
+}
+
+function jbStartRecognition() {
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  jbRecognition = new SR();
+  jbRecognition.lang = 'en-US';
+  jbRecognition.interimResults = false;
+
+  var btn = document.getElementById('jb-mic-btn');
+
+  jbRecognition.onstart = function() {
+    jbMicActive = true;
+    if (btn) btn.classList.add('listening');
+    toast('🎤 Listening…');
+  };
+  jbRecognition.onresult = function(e) {
+    var transcript = e.results[0][0].transcript;
+    var inp = document.getElementById('jb-search');
+    if (inp) inp.value = transcript;
+    jbSearch(transcript);
+  };
+  jbRecognition.onerror = function(e) { jbLog('warn', 'Speech recognition error: ' + e.error); };
+  jbRecognition.onend = function() {
+    jbMicActive = false;
+    if (btn) btn.classList.remove('listening');
+  };
+  try { jbRecognition.start(); } catch(e) { jbLog('error', 'Speech recognition start failed: ' + e.message); }
+}
+
+function jbTogglePlay() {
+  var s = jbActive && states[jbActive];
+  svc('media_player', s && s.state === 'playing' ? 'media_pause' : 'media_play', jbActive);
+}
+
+function jbSvc(service, extra) {
+  if (!jbActive) return;
+  svc('media_player', service, jbActive, extra || {});
+}
+
+function jbSetVolume(val) {
+  if (!jbActive) return;
+  sendCb({type:'call_service', domain:'media_player', service:'volume_set',
+    service_data:{entity_id:jbActive, volume_level:parseFloat(val)/100}}, function(m){
+    if (!m.success) jbLog('error', 'volume_set failed: ' + (m.error && m.error.message));
+  });
+  set('jb-vol-pct', Math.round(val) + '%');
+}
+
+function jbClearQueue() {
+  jbQueue = [];
+  jbRenderQueue();
+  var queueId = JB_QUEUE_IDS[jbActive];
+  if (queueId && jbMaWs && jbMaWs.readyState === WebSocket.OPEN && jbMaWsAuthed) {
+    jbMaWsSend('player_queues/clear', { queue_id: queueId }, function(msg) {
+      if (msg.error) { jbLog('error', 'clear queue failed: ' + (msg.error.details||msg.error.error_code)); return; }
+      toast('🗑 Queue cleared');
+    });
+  } else {
+    sendCb({type:'call_service', domain:'media_player', service:'clear_playlist',
+      service_data:{entity_id:jbActive}}, function(m){
+      if (!m.success) { jbLog('error', 'clear_playlist failed: ' + (m.error && m.error.message)); return; }
+      toast('🗑 Queue cleared');
+    });
+  }
+}
+
+function jbPlayGroup(eids) {
+  if (!eids || !eids.length) return;
+  jbActive = eids[0];
+  jbRenderSpeakerBtns();
+  sendCb({type:'call_service', domain:'media_player', service:'join',
+    service_data:{entity_id:eids[0], group_members:eids.slice(1)}},
+    function(m){
+      if (m.success) {
+        toast('🔊 Grouped speakers');
+      } else {
+        jbLog('error', 'Group failed: ' + (m.error && m.error.message || 'unknown'), m.error);
+      }
+    });
+}
+
+function jbFmtTime(s) {
+  s = Math.max(0, Math.round(s));
+  return Math.floor(s/60) + ':' + ('0'+(s%60)).slice(-2);
+}
+
+function jbStartProgressTick() {
+  clearInterval(jbProgressInterval);
+  var s = jbActive && states[jbActive];
+  if (!s || s.state !== 'playing') return;
+  jbProgressInterval = setInterval(function() {
+    if (jbSeeking) return;
+    jbElapsed = Math.min(jbElapsed + 1, jbDuration);
+    jbUpdateProgressUI();
+  }, 1000);
+}
+
+function jbUpdateProgressUI() {
+  var pct = jbDuration > 0 ? (jbElapsed / jbDuration) * 100 : 0;
+  var slider = document.getElementById('jb-progress');
+  var elapsedEl = document.getElementById('jb-elapsed');
+  var durationEl = document.getElementById('jb-duration');
+  if (slider && !jbSeeking) slider.value = pct;
+  if (elapsedEl) elapsedEl.textContent = jbFmtTime(jbElapsed);
+  if (durationEl) durationEl.textContent = jbFmtTime(jbDuration);
+}
+
+function jbSeekPreview(pct) {
+  jbSeeking = true;
+  var previewSecs = (pct / 100) * jbDuration;
+  var elapsedEl = document.getElementById('jb-elapsed');
+  if (elapsedEl) elapsedEl.textContent = jbFmtTime(previewSecs);
+}
+
+function jbSeek(pct) {
+  jbSeeking = false;
+  if (!jbActive || jbDuration <= 0) return;
+  var seekSecs = Math.round((pct / 100) * jbDuration);
+  jbElapsed = seekSecs;
+  jbUpdateProgressUI();
+  svc('media_player', 'media_seek', jbActive, { seek_position: seekSecs });
+}
+
+window.onload = function() {
+  if (!haToken || haToken === 'YOUR_HA_LONG_LIVED_ACCESS_TOKEN_HERE') {
+    jbLog('error', 'Set haToken at the top of the script');
+    return;
+  }
+  document.getElementById('conn-badge').style.display = 'flex';
+  openWS();
+};
+</script>
+</body>
+</html>
