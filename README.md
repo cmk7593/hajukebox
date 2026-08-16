@@ -101,3 +101,6 @@ as three different systems before you start editing:
   the visual feedback.
 - Two secrets were stripped from this export (`haToken`, `jbMaToken`)
   — you must supply your own for either system to authenticate.
+- There are queuing issues if you try to use another service directly,
+  Spotify, for example, so I would recommend only using queueing related
+  to Music Assistant.
